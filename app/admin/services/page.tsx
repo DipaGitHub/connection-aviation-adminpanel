@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/page-header";
 import { 
   Plus, Pencil, Trash2, Save, X, Loader2, Upload, 
-  ChevronDown, ChevronUp, GripVertical 
+  ChevronDown, ChevronUp, GripVertical, ArrowUpDown 
 } from "lucide-react";
 import {
   Dialog,
@@ -26,6 +26,25 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { toast } from "sonner";
+
+// Import DnD Kit components
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
 interface Service {
   id?: number;
@@ -50,6 +69,73 @@ const API_URL = API.services;
 const FAQ_API_URL = API.serviceFaqs;
 const IMAGE_BASE = HOST_URL;
 
+interface SortableServiceItemProps {
+  service: Service;
+}
+
+function SortableServiceItem({ service }: SortableServiceItemProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: service.id! });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    backgroundColor: isDragging ? "var(--muted)" : "white",
+  };
+
+  return (
+    <Card
+      ref={setNodeRef}
+      style={style}
+      className="overflow-hidden border-border/50 relative shadow-sm"
+    >
+      <CardContent className="p-0 flex items-stretch h-24">
+        {/* Drag handle */}
+        <div
+          {...attributes}
+          {...listeners}
+          className="flex items-center px-4 cursor-grab hover:bg-muted border-r border-border/30 shrink-0"
+        >
+          <GripVertical className="h-5 w-5 text-muted-foreground/60" />
+        </div>
+
+        <div className="w-24 h-24 shrink-0 bg-muted">
+          {service.image_path ? (
+            <img
+              src={`${IMAGE_BASE}${service.image_path}`}
+              alt={service.title}
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center text-muted-foreground text-xs">
+              No Image
+            </div>
+          )}
+        </div>
+
+        <div className="flex-1 p-4 flex flex-col justify-center min-w-0">
+          <div className="flex items-center gap-2">
+            <h3 className="font-bold text-sm truncate">{service.title}</h3>
+            <Badge variant="outline" className="font-mono text-[9px] px-1.5 py-0">
+              {service.slug}
+            </Badge>
+          </div>
+          <p className="text-xs text-muted-foreground line-clamp-1 mt-1">
+            {service.shortDesc}
+          </p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function ServicesPage() {
   const [services, setServices] = useState<Service[]>([]);
   const [loading, setLoading] = useState(true);
@@ -65,6 +151,61 @@ export default function ServicesPage() {
   const [editingFaq, setEditingFaq] = useState<ServiceFaq | null>(null);
   const [faqOpen, setFaqOpen] = useState(false);
   const [expandedServices, setExpandedServices] = useState<Set<number>>(new Set());
+
+  // Reordering states
+  const [reordering, setReordering] = useState(false);
+  const [tempServices, setTempServices] = useState<Service[]>([]);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      setTempServices((items) => {
+        const oldIndex = items.findIndex((item) => item.id === active.id);
+        const newIndex = items.findIndex((item) => item.id === over.id);
+        return arrayMove(items, oldIndex, newIndex);
+      });
+    }
+  };
+
+  const startReordering = () => {
+    setTempServices([...services]);
+    setReordering(true);
+  };
+
+  const saveReorder = async () => {
+    const orders = tempServices.map((s, index) => ({
+      id: s.id,
+      display_order: index + 1,
+    }));
+    try {
+      const res = await fetch(`${API_URL}/reorder`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orders }),
+      });
+      if (!res.ok) throw new Error();
+      toast.success("Services order saved!");
+      setServices(tempServices);
+      setReordering(false);
+    } catch {
+      toast.error("Failed to save order");
+    }
+  };
+
+  const exitReorder = () => {
+    setReordering(false);
+  };
 
   useEffect(() => {
     fetchServices();
@@ -247,164 +388,202 @@ export default function ServicesPage() {
         title="Services"
         description="Manage the aviation services displayed on your website."
         action={
-          <Button
-            onClick={openNew}
-            className="bg-gradient-to-r from-primary to-accent text-primary-foreground hover:opacity-90 shadow-md"
-          >
-            <Plus className="h-4 w-4 mr-2" /> Add Service
-          </Button>
+          <div className="flex gap-2">
+            {reordering ? (
+              <>
+                <Button onClick={exitReorder} variant="outline" size="sm" className="h-9">
+                  <X className="h-4 w-4 mr-2" /> Exit Reorder
+                </Button>
+                <Button onClick={saveReorder} size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white h-9">
+                  <Save className="h-4 w-4 mr-2" /> Save New Order
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button onClick={startReordering} variant="outline" size="sm" className="h-9">
+                  <ArrowUpDown className="h-4 w-4 mr-2" /> Reorder Services
+                </Button>
+                <Button
+                  onClick={openNew}
+                  size="sm"
+                  className="bg-gradient-to-r from-primary to-accent text-primary-foreground hover:opacity-90 shadow-md h-9"
+                >
+                  <Plus className="h-4 w-4 mr-2" /> Add Service
+                </Button>
+              </>
+            )}
+          </div>
         }
       />
 
-      <div className="space-y-4">
-        {services.map((s) => (
-          <Card
-            key={s.id}
-            className="overflow-hidden hover:shadow-lg transition-all border-border/50"
+      {reordering ? (
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+        >
+          <SortableContext
+            items={tempServices.map((s) => s.id!)}
+            strategy={verticalListSortingStrategy}
           >
-            <CardContent className="p-0">
-              <div className="flex h-full flex-col">
-                {/* Service Header */}
-                <div className="flex items-stretch">
-                  <div className="w-1/4 h-48 shrink-0 bg-muted">
-                    {s.image_path ? (
-                      <img
-                        src={`${IMAGE_BASE}${s.image_path}`}
-                        alt={s.title}
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-muted-foreground">
-                        No Image
+            <div className="space-y-4">
+              {tempServices.map((s) => (
+                <SortableServiceItem key={s.id} service={s} />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
+      ) : (
+        <div className="space-y-4">
+          {services.map((s) => (
+            <Card
+              key={s.id}
+              className="overflow-hidden hover:shadow-lg transition-all border-border/50"
+            >
+              <CardContent className="p-0">
+                <div className="flex h-full flex-col">
+                  {/* Service Header */}
+                  <div className="flex items-stretch">
+                    <div className="w-1/4 h-48 shrink-0 bg-muted">
+                      {s.image_path ? (
+                        <img
+                          src={`${IMAGE_BASE}${s.image_path}`}
+                          alt={s.title}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-muted-foreground">
+                          No Image
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex-1 p-5 flex flex-col justify-between min-w-0">
+                      <div>
+                        <Badge
+                          variant="outline"
+                          className="mb-2 font-mono text-[10px]"
+                        >
+                          {s.slug}
+                        </Badge>
+                        <h3 className="font-bold text-lg truncate">{s.title}</h3>
+                        <p className="text-sm text-muted-foreground line-clamp-2 mt-1">
+                          {s.shortDesc}
+                        </p>
                       </div>
-                    )}
+                      <div className="flex gap-2 mt-4">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8"
+                          onClick={() => openEdit(s)}
+                        >
+                          <Pencil className="h-3 w-3 mr-2" /> Edit
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 text-destructive hover:bg-destructive/10"
+                          onClick={() => s.id && remove(s.id)}
+                        >
+                          <Trash2 className="h-3 w-3 mr-2" /> Delete
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 ml-auto"
+                          onClick={() => s.id && toggleServiceExpand(s.id)}
+                        >
+                          {s.id && expandedServices.has(s.id) ? (
+                            <>
+                              <ChevronUp className="h-3 w-3 mr-2" /> Hide FAQs
+                            </>
+                          ) : (
+                            <>
+                              <ChevronDown className="h-3 w-3 mr-2" /> Show FAQs
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex-1 p-5 flex flex-col justify-between min-w-0">
-                    <div>
-                      <Badge
-                        variant="outline"
-                        className="mb-2 font-mono text-[10px]"
-                      >
-                        {s.slug}
-                      </Badge>
-                      <h3 className="font-bold text-lg truncate">{s.title}</h3>
-                      <p className="text-sm text-muted-foreground line-clamp-2 mt-1">
-                        {s.shortDesc}
-                      </p>
-                    </div>
-                    <div className="flex gap-2 mt-4">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-8"
-                        onClick={() => openEdit(s)}
-                      >
-                        <Pencil className="h-3 w-3 mr-2" /> Edit
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-8 text-destructive hover:bg-destructive/10"
-                        onClick={() => s.id && remove(s.id)}
-                      >
-                        <Trash2 className="h-3 w-3 mr-2" /> Delete
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-8 ml-auto"
-                        onClick={() => s.id && toggleServiceExpand(s.id)}
-                      >
-                        {s.id && expandedServices.has(s.id) ? (
-                          <>
-                            <ChevronUp className="h-3 w-3 mr-2" /> Hide FAQs
-                          </>
-                        ) : (
-                          <>
-                            <ChevronDown className="h-3 w-3 mr-2" /> Show FAQs
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                  </div>
-                </div>
 
-                {/* FAQ Section */}
-                {s.id && expandedServices.has(s.id) && (
-                  <div className="border-t border-border/50 p-5 bg-muted/20">
-                    <div className="flex items-center justify-between mb-4">
-                      <h4 className="font-semibold text-sm">
-                        Frequently Asked Questions
-                      </h4>
-                      <Button
-                        size="sm"
-                        onClick={() => s.id && openNewFaq(s.id)}
-                        className="bg-gradient-to-r from-primary to-accent text-primary-foreground hover:opacity-90"
-                      >
-                        <Plus className="h-3 w-3 mr-2" /> Add FAQ
-                      </Button>
-                    </div>
+                  {/* FAQ Section */}
+                  {s.id && expandedServices.has(s.id) && (
+                    <div className="border-t border-border/50 p-5 bg-muted/20">
+                      <div className="flex items-center justify-between mb-4">
+                        <h4 className="font-semibold text-sm">
+                          Frequently Asked Questions
+                        </h4>
+                        <Button
+                          size="sm"
+                          onClick={() => s.id && openNewFaq(s.id)}
+                          className="bg-gradient-to-r from-primary to-accent text-primary-foreground hover:opacity-90"
+                        >
+                          <Plus className="h-3 w-3 mr-2" /> Add FAQ
+                        </Button>
+                      </div>
 
-                    {faqLoading ? (
-                      <div className="flex justify-center py-4">
-                        <Loader2 className="animate-spin text-primary h-6 w-6" />
-                      </div>
-                    ) : faqs.length === 0 ? (
-                      <div className="text-center py-6 text-muted-foreground text-sm border-2 border-dashed rounded-lg">
-                        No FAQs added for this service yet.
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        {faqs.map((faq) => (
-                          <div
-                            key={faq.id}
-                            className="bg-background rounded-lg p-4 border border-border/50 hover:shadow-md transition-shadow"
-                          >
-                            <div className="flex items-start gap-4">
-                              <div className="flex flex-col items-center pt-1 text-muted-foreground/60">
-                                <GripVertical className="h-4 w-4" />
-                                <span className="text-[10px] font-bold mt-1 uppercase">
-                                  {faq.display_order}
-                                </span>
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <h5 className="font-medium text-foreground text-sm">
-                                  {faq.question}
-                                </h5>
-                                <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
-                                  {faq.answer}
-                                </p>
-                              </div>
-                              <div className="flex gap-1 shrink-0">
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  onClick={() => openEditFaq(faq)}
-                                  className="h-8 w-8"
-                                >
-                                  <Pencil className="h-3 w-3" />
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  onClick={() => faq.id && removeFaq(faq.id)}
-                                  className="h-8 w-8 text-destructive hover:bg-destructive/10"
-                                >
-                                  <Trash2 className="h-3 w-3" />
-                                </Button>
+                      {faqLoading ? (
+                        <div className="flex justify-center py-4">
+                          <Loader2 className="animate-spin text-primary h-6 w-6" />
+                        </div>
+                      ) : faqs.length === 0 ? (
+                        <div className="text-center py-6 text-muted-foreground text-sm border-2 border-dashed rounded-lg">
+                          No FAQs added for this service yet.
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {faqs.map((faq) => (
+                            <div
+                              key={faq.id}
+                              className="bg-background rounded-lg p-4 border border-border/50 hover:shadow-md transition-shadow"
+                            >
+                              <div className="flex items-start gap-4">
+                                <div className="flex flex-col items-center pt-1 text-muted-foreground/60">
+                                  <GripVertical className="h-4 w-4" />
+                                  <span className="text-[10px] font-bold mt-1 uppercase">
+                                    {faq.display_order}
+                                  </span>
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <h5 className="font-medium text-foreground text-sm">
+                                    {faq.question}
+                                  </h5>
+                                  <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
+                                    {faq.answer}
+                                  </p>
+                                </div>
+                                <div className="flex gap-1 shrink-0">
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => openEditFaq(faq)}
+                                    className="h-8 w-8"
+                                  >
+                                    <Pencil className="h-3 w-3" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => faq.id && removeFaq(faq.id)}
+                                    className="h-8 w-8 text-destructive hover:bg-destructive/10"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </Button>
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
 
       {/* Service Edit/Create Dialog */}
       <Dialog open={open} onOpenChange={setOpen}>

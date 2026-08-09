@@ -14,6 +14,8 @@ import {
   PanelLeft,
   History,
   MessageSquare,
+  Users,
+  Mail,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -29,7 +31,9 @@ const navItems = [
   { href: "/admin/enquery", label: "Enquiries", icon: HelpCircle },
   { href: "/admin/testimonials", label: "Testimonials", icon: HelpCircle },
   { href: "/admin/blogpage", label: "Blog", icon: HelpCircle },
+  { href: "/admin/templates", label: "Email Templates", icon: Mail },
   { href: "/admin/chat", label: "Chat Assistance", icon: MessageSquare },
+  { href: "/admin/chat/leads", label: "Chat Leads", icon: Users, isSub: true },
 ];
 
 interface AdminLayoutProps {
@@ -74,19 +78,27 @@ export function AdminLayout({ children }: AdminLayoutProps) {
           <ul className="space-y-1">
             {navItems.map((item) => {
               const isActive = pathname === item.href;
+              
+              // Only show sub-menu items if the parent section is currently active
+              if (item.isSub) {
+                const isParentActive = pathname.startsWith("/admin/chat");
+                if (!isParentActive) return null;
+              }
+
               return (
                 <li key={item.href}>
                   <Link
                     href={item.href}
                     className={cn(
                       "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors",
+                      item.isSub && !collapsed && "pl-8 text-xs text-muted-foreground/80 hover:text-foreground",
                       isActive
-                        ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                        ? "bg-sidebar-accent text-sidebar-accent-foreground font-semibold"
                         : "text-sidebar-foreground hover:bg-muted"
                     )}
                     title={collapsed ? item.label : undefined}
                   >
-                    <item.icon className="h-5 w-5 shrink-0" />
+                    <item.icon className={cn("shrink-0", item.isSub ? "h-4 w-4" : "h-5 w-5")} />
                     {!collapsed && <span>{item.label}</span>}
                   </Link>
                 </li>

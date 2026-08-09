@@ -91,6 +91,46 @@ interface EmailTemplate {
   description: string;
 }
 
+const resolvePlaceholders = (text: string, enquiry: any, customMsg: string) => {
+  if (!text || !enquiry) return "";
+
+  // Parse legs for charter enquiries
+  let firstLeg: any = {};
+  if (enquiry.one_way_legs) {
+    try {
+      const legs = typeof enquiry.one_way_legs === "string"
+        ? JSON.parse(enquiry.one_way_legs)
+        : enquiry.one_way_legs;
+      if (Array.isArray(legs) && legs.length > 0) {
+        firstLeg = legs[0];
+      }
+    } catch (e) {
+      console.error("Error parsing legs in resolvePlaceholders:", e);
+    }
+  }
+
+  const replacements: Record<string, string> = {
+    "{{customer_name}}": `${enquiry.first_name || ""} ${enquiry.last_name || ""}`.trim(),
+    "{{enquiry_id}}": enquiry.enquiry_id || "",
+    "{{trip_type}}": enquiry.trip_type || "",
+    "{{email}}": enquiry.email || "",
+    "{{phone}}": enquiry.phone || "",
+    "{{custom_message}}": customMsg || "",
+    "{{current_date}}": new Date().toLocaleDateString(),
+    "{{from}}": enquiry.from || firstLeg.departure || "",
+    "{{to}}": enquiry.to || firstLeg.arrival || "",
+    "{{date_of_journey}}": enquiry.date_of_journey || firstLeg.date || "",
+    "{{time_of_journey}}": enquiry.time_of_journey || firstLeg.time || "",
+    "{{passengers}}": enquiry.passengers ? String(enquiry.passengers) : (firstLeg.passengers ? String(firstLeg.passengers) : ""),
+  };
+  
+  let resolved = text;
+  Object.keys(replacements).forEach((key) => {
+    resolved = resolved.replace(new RegExp(key, "g"), replacements[key]);
+  });
+  return resolved;
+};
+
 export default function EnquiriesPage() {
   const [loadingCharter, setLoadingCharter] = useState(true);
   const [loadingHeli, setLoadingHeli] = useState(true);
@@ -482,45 +522,18 @@ export default function EnquiriesPage() {
 
       {/* SEND EMAIL MODAL */}
       <Dialog open={sendEmailModalOpen} onOpenChange={setSendEmailModalOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-2xl bg-white border-border rounded-xl shadow-lg">
           <DialogHeader>
-            <DialogTitle className="text-2xl font-bold">
-              Send Email to {selectedEnquiry?.first_name} {selectedEnquiry?.last_name}
+            <DialogTitle className="text-xl font-bold flex items-center gap-2">
+              <Mail className="h-5 w-5 text-primary" /> Send Responses & Offers
             </DialogTitle>
           </DialogHeader>
           
-          <div className="space-y-6 py-4">
-            <div className="bg-muted/30 rounded-lg p-4 space-y-2">
-              <div className="flex items-center gap-2 text-sm">
-                <Mail className="w-4 h-4 text-muted-foreground" />
-                <span className="font-medium">To:</span>
-                <span>{selectedEnquiry?.email}</span>
-              </div>
-              <div className="flex items-center gap-2 text-sm">
-                <Phone className="w-4 h-4 text-muted-foreground" />
-                <span className="font-medium">Phone:</span>
-                <span>{selectedEnquiry?.phone}</span>
-              </div>
-              {emailType === "charter" && (
-                <div className="flex items-center gap-2 text-sm">
-                  <Plane className="w-4 h-4 text-muted-foreground" />
-                  <span className="font-medium">Enquiry ID:</span>
-                  <span className="font-mono text-xs">{selectedEnquiry?.enquiry_id}</span>
-                </div>
-              )}
-              {emailType === "helicopter" && (
-                <div className="flex items-center gap-2 text-sm">
-                  <Helicopter className="w-4 h-4 text-muted-foreground" />
-                  <span className="font-medium">Route:</span>
-                  <span>{selectedEnquiry?.from} → {selectedEnquiry?.to}</span>
-                </div>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="template">Email Template (Optional)</Label>
+          <div className="space-y-4 py-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="template" className="text-xs uppercase font-bold text-muted-foreground tracking-wider">Email Template *</Label>
               <Select value={selectedTemplateId} onValueChange={setSelectedTemplateId}>
-                <SelectTrigger>
+                <SelectTrigger className="w-full">
                   <SelectValue placeholder="Select a template or write custom message" />
                 </SelectTrigger>
                 <SelectContent>
@@ -534,45 +547,71 @@ export default function EnquiriesPage() {
               </Select>
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="message">
-                {selectedTemplateId !== "none" ? "Additional Custom Message (Optional)" : "Custom Message"}
-              </Label>
-              <Textarea
-                id="message"
-                placeholder={selectedTemplateId !== "none" 
-                  ? "Add any additional notes or custom message to include with the template..." 
-                  : "Write your custom email message here..."
-                }
-                value={customMessage}
-                onChange={(e) => setCustomMessage(e.target.value)}
-                rows={6}
-                className="resize-none"
-              />
-              <p className="text-xs text-muted-foreground">
-                {selectedTemplateId !== "none" 
-                  ? "This message will be appended to the selected template." 
-                  : "This message will be sent as the email body."}
-              </p>
-            </div>
-
-            {selectedTemplateId !== "none" && templates.find(t => t.id.toString() === selectedTemplateId) && (
-              <div className="space-y-2">
-                <Label>Template Preview</Label>
-                <div className="bg-muted/20 rounded-lg p-4 border border-border">
-                  <div className="font-semibold text-sm mb-2">
-                    Subject: {templates.find(t => t.id.toString() === selectedTemplateId)?.subject}
-                  </div>
-                  <div className="text-sm text-muted-foreground whitespace-pre-wrap">
-                    {templates.find(t => t.id.toString() === selectedTemplateId)?.description.substring(0, 200)}
-                    {(templates.find(t => t.id.toString() === selectedTemplateId)?.description.length || 0) > 200 && "..."}
-                  </div>
+            {/* Email Composer Format */}
+            <div className="border border-border rounded-lg overflow-hidden bg-white shadow-xs">
+              {/* Header Details */}
+              <div className="bg-slate-50/50 p-4 border-b border-border space-y-3 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-muted-foreground w-12 shrink-0">From:</span>
+                  <span className="font-mono text-slate-800 bg-slate-100/80 px-2 py-0.5 rounded text-xs border border-slate-200">aviation@braventra.in</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-muted-foreground w-12 shrink-0">To:</span>
+                  <span className="font-mono text-slate-800 bg-slate-100/80 px-2 py-0.5 rounded text-xs border border-slate-200">{selectedEnquiry?.email}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-muted-foreground w-12 shrink-0">Subject:</span>
+                  <span className="font-semibold text-slate-900 truncate">
+                    {selectedTemplateId !== "none" 
+                      ? resolvePlaceholders(templates.find(t => t.id.toString() === selectedTemplateId)?.subject || "", selectedEnquiry, customMessage)
+                      : `Response to your ${emailType === "charter" ? "Charter" : "Helicopter"} Enquiry - ${selectedEnquiry?.enquiry_id}`
+                    }
+                  </span>
                 </div>
               </div>
-            )}
+
+              {/* Body Preview & Inputs */}
+              <div className="p-4 space-y-4">
+                {selectedTemplateId !== "none" ? (
+                  <>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs uppercase font-bold text-muted-foreground tracking-wider block">Live Message Preview</Label>
+                      <div className="mt-1 p-3 rounded-lg border border-slate-200 bg-slate-50/30 text-slate-800 text-xs leading-relaxed whitespace-pre-wrap font-sans max-h-52 overflow-y-auto">
+                        {resolvePlaceholders(templates.find(t => t.id.toString() === selectedTemplateId)?.description || "", selectedEnquiry, customMessage)}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label htmlFor="custom-msg" className="text-xs uppercase font-bold text-muted-foreground tracking-wider">Custom Message (Replaces {"{{custom_message}}"} in template)</Label>
+                      <Textarea
+                        id="custom-msg"
+                        rows={4}
+                        value={customMessage}
+                        onChange={(e) => setCustomMessage(e.target.value)}
+                        placeholder="Add specific flight coordinates, pricing, or custom message body..."
+                        className="text-xs resize-none"
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="custom-body" className="text-xs uppercase font-bold text-muted-foreground tracking-wider">Email Body Message</Label>
+                    <Textarea
+                      id="custom-body"
+                      rows={7}
+                      value={customMessage}
+                      onChange={(e) => setCustomMessage(e.target.value)}
+                      placeholder="Write your custom email body text here..."
+                      className="text-xs resize-none"
+                      required
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
 
-          <div className="flex justify-end gap-3 pt-4 border-t">
+          <div className="flex justify-end gap-3 pt-4 border-t border-border">
             <Button variant="outline" onClick={() => setSendEmailModalOpen(false)}>
               Cancel
             </Button>
